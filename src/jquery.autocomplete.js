@@ -534,71 +534,72 @@
         },
 
         getSuggestions: function (q) {
-            var response,
-                that = this,
-                options = that.options,
-                serviceUrl = options.serviceUrl,
-                params,
-                cacheKey,
-                ajaxSettings;
+getSuggestions: function (q) {
+    var response
+        , that = this
+        , options = that.options;
 
-            options.params[options.paramName] = q;
-            params = options.ignoreParams ? null : options.params;
+    response = that.isLocal ? that.getSuggestionsLocal(q) : that.cachedResponse[q];
+    if (response && $.isArray(response.suggestions)) {
+        response.suggestions.sort(function (a, b) {
+            a = a.value.toLowerCase();
+            b = b.value.toLowerCase();
+            return a < b ? -1 : (a > b ? 1 : 0);
+        });
 
-            if (options.onSearchStart.call(that.element, options.params) === false) {
-                return;
-            }
-
-            if ($.isFunction(options.lookup)){
-                options.lookup(q, function (data) {
-                    that.suggestions = data.suggestions;
-                    that.suggest();
-                    options.onSearchComplete.call(that.element, q, data.suggestions);
-                });
-                return;
-            }
-
-            if (that.isLocal) {
-                response = that.getSuggestionsLocal(q);
+        /* create and populate tuples <Object, indexFound> */
+        var suggestionExactMatches = [];
+        var suggestionStartsWith = [];
+        var suggestionByIndexTuple = [];
+        for (var i = 0; i < response.suggestions.length; i++) {
+            if (response.suggestions[i].value.toLowerCase() === (q.toLowerCase())) {
+                suggestionExactMatches.push(response.suggestions[i]);
+            } else if (response.suggestions[i].value.toLowerCase()
+                .indexOf(q.toLowerCase()) === 0) {
+                suggestionStartsWith.push(response.suggestions[i]);
             } else {
-                if ($.isFunction(serviceUrl)) {
-                    serviceUrl = serviceUrl.call(that.element, q);
-                }
-                cacheKey = serviceUrl + '?' + $.param(params || {});
-                response = that.cachedResponse[cacheKey];
+                var indexFound = response.suggestions[i].value.toLowerCase()
+                    .indexOf(q.toLowerCase());
+                if (indexFound >= 0)
+                    suggestionByIndexTuple.push([response.suggestions[i], indexFound]);
             }
+        }
 
-            if (response && $.isArray(response.suggestions)) {
-                that.suggestions = response.suggestions;
-                that.suggest();
-                options.onSearchComplete.call(that.element, q, response.suggestions);
-            } else if (!that.isBadQuery(q)) {
-                if (that.currentRequest) {
-                    that.currentRequest.abort();
-                }
+        /* sort tuples by value <index> */
+        suggestionByIndexTuple.sort(function (a, b) {
+            var a_key = a[0].value;
+            var a_value = a[1];
+            var b_key = b[0].value;
+            var b_value = b[1];
 
-                ajaxSettings = {
-                    url: serviceUrl,
-                    data: params,
-                    type: options.type,
-                    dataType: options.dataType
-                };
+            return a_value < b_value ? -1 : (a_value > b_value ? 1 : (a_key < b_key ? -1 : (a_key > b_key ? 1 : 0)));
+        });
 
-                $.extend(ajaxSettings, options.ajaxSettings);
+        /*extract list and put it back in a regular array but now sorted*/
+        var suggestionByIndexTupleSorted = [];
+        for (var j = 0; j < suggestionByIndexTuple.length; j++) {
+            suggestionByIndexTupleSorted.push(suggestionByIndexTuple[j][0]);
+        }
+        var suggestionSorted = suggestionExactMatches.concat(suggestionStartsWith)
+            .concat(suggestionByIndexTupleSorted);
 
-                that.currentRequest = $.ajax(ajaxSettings).done(function (data) {
-                    var result;
-                    that.currentRequest = null;
-                    result = options.transformResult(data);
-                    that.processResponse(result, q, cacheKey);
-                    options.onSearchComplete.call(that.element, q, result.suggestions);
-                }).fail(function (jqXHR, textStatus, errorThrown) {
-                    options.onSearchError.call(that.element, q, jqXHR, textStatus, errorThrown);
-                });
-            } else {
-                options.onSearchComplete.call(that.element, q, []);
-            }
-        },
+        that.suggestions = suggestionSorted;
+        that.suggest();
+    } else if (!that.isBadQuery(q)) {
+        options.onSearchStart.call(that.element, q);
+        options.params[options.paramName] = q;
+        $.ajax({
+                url: options.serviceUrl
+                , data: options.params
+                , type: options.type
+                , dataType: 'text'
+            })
+            .done(function (txt) {
+                that.processResponse(txt);
+                options.onSearchComplete.call(that.element, q);
+            });
+    }
+},
 
         isBadQuery: function (q) {
             if (!this.options.preventBadQueries){
